@@ -1,0 +1,156 @@
+---
+title: "Introduction to MAF"
+author: Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/3/24
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *At the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r setup}
+    knitr::opts_knit$set(root.dir = normalizePath("/Users/chenchangshen/Desktop/FAQBIO490/490_cluster/analysis_data")) 
+```
+
+```{r}
+library(maftools)
+library(TCGAbiolinks)
+library(ggplot2)
+clinical <- read.csv("/Users/chenchangshen/Desktop/FAQBIO490/490_cluster/analysis_data/brca_clinical_data.csv")
+
+
+
+maf_query <- GDCquery(
+  project = 'TCGA-BRCA',
+  data.category = "Simple Nucleotide Variation",
+  access = "open", # we only have access to somatic mutations which are open access
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+#GDCdownload(maf_query)
+
+maf <- GDCprepare(maf_query) # as long as it runs, ignore any errors
+
+maf_object <- read.maf(maf = maf,
+                       clinicalData = clinical, 
+                       isTCGA = TRUE)
+
+```
+
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+unique(maf_object@clinical.data$tumor_status)
+maf_object@clinical.data$tumor_category <- ifelse(maf_object@clinical.data$tumor_status %in% c("WITH TUMOR", "TUMOR FREE"), maf_object@clinical.data$tumor_status, NA)
+
+oncoplot(maf = maf_object,
+         top = 10,
+         clinicalFeatures = "tumor_category",
+         borderCol = NA)
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+```{r}
+library(maftools)
+tumor_patient_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_object@clinical.data$tumor_status == 'WITH TUMOR']
+
+maf_with_tumor <- subsetMaf(maf = maf_object,
+                       tsb = tumor_patient_barcodes)                        
+
+tumor_free_patient_barcodes <- maf_object@clinical.data$Tumor_Sample_Barcode[maf_object@clinical.data$tumor_status == 'TUMOR FREE']
+
+maf_without_tumor <- subsetMaf(maf = maf_object,
+                       tsb = tumor_free_patient_barcodes)    
+coOncoplot(m1 = maf_with_tumor, 
+           m2 = maf_without_tumor, 
+           m1Name = "With Tumor", 
+           m2Name = "Tumor Free", 
+           borderCol = NA)
+#IK3CA encodes the catalytic subunit of the enzyme phosphatidylinositol-4,5-bisphosphate 3-kinase, also known as PI3K. This enzyme is a key component of the PI3K/AKT signaling pathway, which plays a crucial role in regulating cellular functions such as growth, proliferation, metabolism, and survival. As a frequently mutated gene in various cancers, PIK3CA mutations are often early drivers of tumorigenesis, especially in breast, colon, and endometrial cancers.
+```
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+```{r}
+library(maftools)
+library(ggplot2)
+
+with_tumor_mutations <- subsetMaf(maf = maf_with_tumor, genes = "PIK3CA")@data
+tumor_free_mutations <- subsetMaf(maf = maf_without_tumor, genes = "PIK3CA")@data
+
+contingency_table <- table(
+  Tumor_Status = c(rep("With Tumor", nrow(with_tumor_mutations)), 
+                   rep("Tumor Free", nrow(tumor_free_mutations))),
+  Mutation_Status = c(with_tumor_mutations$Variant_Classification, 
+                      tumor_free_mutations$Variant_Classification)
+)
+
+print(contingency_table)
+
+fisher_test <- fisher.test(contingency_table)
+print(fisher_test)
+
+mosaicplot(contingency_table)
+#A p-value of 1 suggests no statistically significant association between PIK3CA mutations and the clinical variable. An Odd ratio of 1.2156 means that the odds of having a PIK3CA mutation in one group are about 1.2 times than in the other group. However, this value is very close to 1, indicating only a minimal difference in odds between the groups.
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+```{r}
+maf_with_tumor <- subsetMaf(maf = maf_object, clinQuery = "tumor_status == 'WITH TUMOR'")
+maf_tumor_free <- subsetMaf(maf = maf_object, clinQuery = "tumor_status == 'TUMOR FREE'")
+lollipopPlot2(m1 = maf_with_tumor, 
+            m2 = maf_tumor_free, 
+            gene = "PIK3CA", 
+            m1_name = "With Tumor", 
+            m2_name = "Tumor Free", 
+           )
+#The "Tumor Free" group has a higher mutation frequency in PIK3CA compared to the "With Tumor" group. Missense Mutations (green dots) are predominant in both groups. The clustering of mutations within key functional domains (like PI3Ka_I and PI3Kc_II_alpha) is consistent across both groups.
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+```{r}
+library(maftools)
+
+clinical$Overall_Survival_Status <- ifelse(clinical$vital_status == "Dead", 1, 0)
+
+
+clinical$death_days_to[clinical$death_days_to == "[Not Applicable]"] <- NA
+
+clinical$survival_time <- ifelse(is.na(clinical$death_days_to),
+                                    clinical$last_contact_days_to,
+                                    clinical$death_days_to)
+matching_indices <- match(maf_object@clinical.data$Tumor_Sample_Barcode, clinical$Tumor_Sample_Barcode)
+
+maf_object@clinical.data$Overall_Survival_Status <- clinical$Overall_Survival_Status[matching_indices]
+maf_object@clinical.data$survival_time <- clinical$survival_time[matching_indices]
+
+mafSurvival(maf = maf_object, 
+            genes = "PIK3CA", 
+            time = "survival_time", 
+            Status = "Overall_Survival_Status",
+            isTCGA = FALSE, 
+            groupNames = c("PIK3CA Mutated", "PIK3CA Wild-Type"))
+#The Kaplan-Meier analysis supports the hypothesis that PIK3CA mutations alone do not significantly impact survival in this population. PIK3CA may not be a crucial determinant of survival outcomes
+```
