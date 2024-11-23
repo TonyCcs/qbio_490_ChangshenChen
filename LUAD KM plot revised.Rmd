@@ -1,0 +1,119 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+#Install TCGAbiolinks
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+BiocManager::install("TCGAbiolinks")
+library(TCGAbiolinks)
+
+#Download data from TCGA
+clin_query <- GDCquery(project = "TCGA-LUAD",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'BCR Biotab')
+#GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinic <- clinical.BCRtab.all$clinical_patient_luad[-c(1,2),]
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <-
+"Tumor_Sample_Barcode"
+```
+
+```{r}
+write.csv(clinic, "/Users/chenchangshen/Desktop/FAQBIO490/490_cluster/analysis_data/luad_clinical_data.csv", row.names = FALSE)
+clinic <- read.csv("/Users/chenchangshen/Desktop/FAQBIO490/490_cluster/analysis_data/luad_clinical_data.csv")
+```
+
+```{r}
+#Mask NAs in vital status
+vital_status_na_mask <- !is.na(clinic$vital_status)
+cleaned_clinic <- clinic[vital_status_na_mask, ]
+
+#Filter non-smokers from patients whose pack years are not available
+cleaned_clinic$tobacco_smoking_pack_years_smoked <- ifelse(
+  cleaned_clinic$tobacco_smoking_history_indicator == 1 & cleaned_clinic$tobacco_smoking_pack_years_smoked == "[Not Available]",
+  0,
+  cleaned_clinic$tobacco_smoking_pack_years_smoked
+)
+cleaned_clinic$tobacco_smoking_pack_years_smoked <- as.numeric(cleaned_clinic$tobacco_smoking_pack_years_smoked)
+
+# Calculate quartiles for pack years
+quantiles <- quantile(cleaned_clinic$tobacco_smoking_pack_years_smoked, probs = c(0.25, 0.5, 0.75), na.rm = TRUE)
+
+# Assign categories based on quartiles
+cleaned_clinic$smoking_category <- ifelse(
+  cleaned_clinic$tobacco_smoking_pack_years_smoked == 0, "Non-smoker",
+  ifelse(cleaned_clinic$tobacco_smoking_pack_years_smoked <= quantiles[1], "Low Exposure",
+  ifelse(cleaned_clinic$tobacco_smoking_pack_years_smoked <= quantiles[2], "Moderate Exposure",
+  ifelse(cleaned_clinic$tobacco_smoking_pack_years_smoked <= quantiles[3], "High Exposure", "Very High Exposure"))))
+
+
+#Mask NAs in smoking categories
+smoking_mask <- !is.na(cleaned_clinic$smoking_category)
+cleaned_clinic <- cleaned_clinic[smoking_mask, ]
+
+
+#Create survival time column by replacing NAs in death day counts by last contact day counts
+cleaned_clinic$death_days_to[cleaned_clinic$death_days_to == "[Not Applicable]"] <- NA
+
+cleaned_clinic$survival_time <- ifelse(is.na(cleaned_clinic$death_days_to),
+                                       cleaned_clinic$last_contact_days_to,
+                                       cleaned_clinic$death_days_to)
+
+#Mask NAs in survival time
+cleaned_clinic$survival_time <- as.numeric(cleaned_clinic$survival_time)
+cleaned_clinic <- cleaned_clinic[!is.na(cleaned_clinic$survival_time), ]
+
+#Process death event column
+cleaned_clinic$death_event <-  ifelse(cleaned_clinic$vital_status == "Dead", TRUE, FALSE)
+
+survival_object <- Surv(time = cleaned_clinic$survival_time,
+                        event = cleaned_clinic$death_event)
+
+fit_object <- survfit(survival_object ~ smoking_category, data = cleaned_clinic)
+```
+
+
+```{r}
+#Download packages for KM plot
+if (!require(survival)) {
+  install.packages("survival")
+}
+
+if (!require(survminer)) {
+  install.packages("survminer")
+}
+
+if (!require(ggplot2)) {
+  install.packages("ggplot2")
+}
+
+# Load the package
+library(survival)
+library(survminer)
+library(ggplot2)
+```
+
+```{r}
+#plotting the KM plot
+survplot <- ggsurvplot(fit_object,
+                       pval=TRUE,
+                       ggtheme = theme(plot.margin = unit(c(1,1,1,1), "cm")),
+                       legend = 'right')
+
+KM_plot <- survplot$plot + theme_bw() + theme(axis.title = element_text(size=20), 
+                                              axis.text = element_text(size=16),
+                                              legend.title = element_text(size=14),
+                                              legend.text = element_text(size=12))
+
+KM_plot
+```
+
+```{r}
+table(cleaned_clinic$smoking_category)
+```
+
